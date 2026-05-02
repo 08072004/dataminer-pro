@@ -17,7 +17,7 @@ def render() -> str:
     Retourne la clé du volet sélectionné (str).
     """
     with st.sidebar:
-        st.markdown("## 🔬 DataMiner Pro")
+        st.markdown("## 🔬 DataMiner")
         st.markdown(
             "<span class='badge'>v1.0 · TP Fouille de Données</span>",
             unsafe_allow_html=True,

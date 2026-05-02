@@ -367,7 +367,19 @@ def _tab_kmeans(X: np.ndarray):
             labels = km.fit_predict(X)
             st.session_state.cluster_labels = labels
 
-        st.success(f"✅ K-Means terminé. Inertie : **{km.inertia_:.2f}**")
+        st.success(f"✅ K-Means terminé")
+
+        # ---- Métriques côte à côte ----
+        col_sil, col_inert = st.columns(2)
+        with col_sil:
+            if len(set(labels)) > 1:
+                sil = silhouette_score(X, labels)
+                st.metric("📊 Score de Silhouette", f"{sil:.4f}")
+            else:
+                st.warning("Silhouette non calculable")
+        
+        with col_inert:
+            st.metric("⚡ Inertie", f"{km.inertia_:.2f}")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -401,7 +413,19 @@ def _tab_kmedoids(X: np.ndarray):
         with st.spinner("K-Medoids en cours..."):
             labels, medoid_idx, inertia = kmedoids(X, k)
 
-        st.success(f"✅ K-Medoids terminé. Inertie (somme distances) : **{inertia:.2f}**")
+        st.success(f"✅ K-Medoids terminé")
+
+        # ---- Métriques côte à côte ----
+        col_sil, col_inert = st.columns(2)
+        with col_sil:
+            if len(set(labels)) > 1:
+                sil = silhouette_score(X, labels)
+                st.metric("📊 Score de Silhouette", f"{sil:.4f}")
+            else:
+                st.warning("Silhouette non calculable")
+        
+        with col_inert:
+            st.metric("⚡ Inertie", f"{inertia:.2f}")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -488,13 +512,33 @@ def _tab_dbscan(X: np.ndarray):
             f"**{n_noise} point(s) bruit** ({n_noise / len(labels) * 100:.1f}%)"
         )
 
-        # Silhouette (sans les points bruit)
-        mask = labels != -1
-        if mask.sum() > n_clusters:
-            sil = silhouette_score(X_fit[mask], labels[mask])
-            st.metric("Score de Silhouette (hors bruit)", f"{sil:.4f}")
-        else:
-            st.warning("Trop peu de points non-bruit pour calculer la silhouette.")
+        # ---- Métriques côte à côte ----
+        col_sil, col_inert = st.columns(2)
+        with col_sil:
+            mask = labels != -1
+            if mask.sum() > n_clusters:
+                sil = silhouette_score(X_fit[mask], labels[mask])
+                st.metric("📊 Score de Silhouette (hors bruit)", f"{sil:.4f}")
+            else:
+                st.warning("Silhouette non calculable")
+        
+        with col_inert:
+            # DBSCAN n'a pas d'inertie traditionnelle, on calcule une approximation
+            try:
+                from sklearn.metrics import pairwise_distances
+                # Calculer l'inertie intra-cluster approximative (sans le bruit)
+                inertia_approx = 0
+                mask = labels != -1  # Exclure le bruit
+                for cluster_id in np.unique(labels[mask]):
+                    if cluster_id != -1:  # Ignorer le bruit
+                        cluster_points = X_fit[mask & (labels == cluster_id)]
+                        if len(cluster_points) > 1:
+                            # Distance intra-cluster
+                            intra_distances = pairwise_distances(cluster_points)
+                            inertia_approx += np.sum(intra_distances) / 2
+                st.metric("⚡ Inertie (clusters uniquement)", f"{inertia_approx:.2f}")
+            except:
+                st.info("Inertie non calculable pour DBSCAN")
 
         col1, col2 = st.columns(2)
 
@@ -595,17 +639,23 @@ def _tab_agnes(X: np.ndarray):
 
     La stratégie de liaison (*linkage*) définit la distance entre clusters.
     """)
-
     # ---- Paramètres ----
     col_a, col_b = st.columns(2)
     with col_a:
-        default_k = st.session_state.get("auto_detected_k", 3)
-        n_clusters = int(st.number_input(
-            "Nombre de clusters k", min_value=2, max_value=20,
-            value=default_k, key="agnes_k",
-        ))
-        if "auto_detected_k" in st.session_state and n_clusters == st.session_state.auto_detected_k:
-            st.info(f"🤖 k optimal détecté automatiquement : {n_clusters}")
+        use_k = st.checkbox("🔢 Spécifier un nombre de clusters k", value=False, 
+                           help="Si décoché, AGNES s'exécutera sans contrainte sur k")
+        
+        n_clusters = None
+        if use_k:
+            default_k = st.session_state.get("auto_detected_k", 3)
+            n_clusters = int(st.number_input(
+                "Nombre de clusters k", min_value=2, max_value=20,
+                value=default_k, key="agnes_k",
+            ))
+            if "auto_detected_k" in st.session_state and n_clusters == st.session_state.auto_detected_k:
+                st.info(f"🤖 k optimal détecté automatiquement : {n_clusters}")
+        else:
+            st.info("🌳 AGNES s'exécutera sans contrainte sur k - le dendrogramme déterminera la structure")
 
     with col_b:
         linkage_method = st.selectbox(
@@ -627,21 +677,51 @@ def _tab_agnes(X: np.ndarray):
 
     if st.button("▶️ Lancer AGNES"):
         with st.spinner("Clustering AGNES en cours..."):
-            # Clustering sklearn pour les labels
-            agg = AgglomerativeClustering(
-                n_clusters=n_clusters, linkage=linkage_method
-            )
-            labels = agg.fit_predict(X)
-
-            # Linkage scipy pour le dendrogramme
+            # Linkage scipy pour le dendrogramme (toujours calculé)
             Z = linkage(X, method=linkage_method)
+            
+            if use_k and n_clusters:
+                # Mode avec k spécifié : utiliser sklearn
+                agg = AgglomerativeClustering(
+                    n_clusters=n_clusters, linkage=linkage_method
+                )
+                labels = agg.fit_predict(X)
+                st.success(f"✅ AGNES terminé — {n_clusters} clusters avec linkage '{linkage_method}'")
+            else:
+                # Mode sans k : utiliser scipy pour déterminer les clusters depuis le dendrogramme
+                # Distance de coupure automatique (basée sur la plus grande fusion)
+                max_distance = Z[-1, 2]  # Distance de la dernière fusion
+                cutoff = max_distance * 0.7  # 70% de la distance max comme heuristique
+                
+                labels = fcluster(Z, t=cutoff, criterion='distance')
+                n_clusters_found = len(set(labels))
+                st.success(f"✅ AGNES terminé — {n_clusters_found} clusters détectés automatiquement avec linkage '{linkage_method}'")
+                st.info(f"🎯 Distance de coupure utilisée : {cutoff:.3f}")
 
-        st.success(f"✅ AGNES terminé — {n_clusters} clusters avec linkage '{linkage_method}'")
-
-        # ---- Silhouette ----
-        if len(set(labels)) > 1:
-            sil = silhouette_score(X, labels)
-            st.metric("Score de Silhouette", f"{sil:.4f}")
+        # ---- Métriques côte à côte ----
+        col_sil, col_inert = st.columns(2)
+        with col_sil:
+            if len(set(labels)) > 1:
+                sil = silhouette_score(X, labels)
+                st.metric("📊 Score de Silhouette", f"{sil:.4f}")
+            else:
+                st.warning("Silhouette non calculable")
+        
+        with col_inert:
+            # AGNES n'a pas d'inertie directe, on calcule une approximation
+            try:
+                from sklearn.metrics import pairwise_distances
+                # Calculer l'inertie intra-cluster approximative
+                inertia_approx = 0
+                for cluster_id in np.unique(labels):
+                    cluster_points = X[labels == cluster_id]
+                    if len(cluster_points) > 1:
+                        # Distance intra-cluster
+                        intra_distances = pairwise_distances(cluster_points)
+                        inertia_approx += np.sum(intra_distances) / 2
+                st.metric("⚡ Inertie (approx.)", f"{inertia_approx:.2f}")
+            except:
+                st.info("Inertie non calculable pour AGNES")
 
         col1, col2 = st.columns(2)
 
@@ -661,28 +741,53 @@ def _tab_agnes(X: np.ndarray):
         # ---- Dendrogramme ----
         st.markdown("#### 🌲 Dendrogramme")
         fig, ax = dark_fig(figsize=(14, 5))
-        dendrogram(
-            Z,
-            truncate_mode="lastp",
-            p=max_dendro,
-            leaf_rotation=90.0,
-            leaf_font_size=8.0,
-            show_contracted=True,
-            ax=ax,
-            color_threshold=Z[-(n_clusters - 1), 2],
-            above_threshold_color="#8b949e",
-        )
-        ax.set_title(
-            f"Dendrogramme AGNES — linkage={linkage_method}, k={n_clusters}",
-            color="#e6edf3",
-        )
+        
+        if use_k and n_clusters:
+            # Mode avec k spécifié
+            dendrogram(
+                Z,
+                truncate_mode="lastp",
+                p=max_dendro,
+                leaf_rotation=90.0,
+                leaf_font_size=8.0,
+                show_contracted=True,
+                ax=ax,
+                color_threshold=Z[-(n_clusters - 1), 2],
+                above_threshold_color="#8b949e",
+            )
+            ax.set_title(
+                f"Dendrogramme AGNES — linkage={linkage_method}, k={n_clusters}",
+                color="#e6edf3",
+            )
+            ax.axhline(
+                y=Z[-(n_clusters - 1), 2],
+                color="red", linestyle="--", linewidth=1.5, alpha=0.8,
+                label=f"Coupe à k={n_clusters}",
+            )
+        else:
+            # Mode sans k : pas de ligne de coupe
+            dendrogram(
+                Z,
+                truncate_mode="lastp",
+                p=max_dendro,
+                leaf_rotation=90.0,
+                leaf_font_size=8.0,
+                show_contracted=True,
+                ax=ax,
+                above_threshold_color="#8b949e",
+            )
+            ax.set_title(
+                f"Dendrogramme AGNES — linkage={linkage_method} (sans contrainte k)",
+                color="#e6edf3",
+            )
+            ax.axhline(
+                y=cutoff,
+                color="orange", linestyle="--", linewidth=1.5, alpha=0.8,
+                label=f"Coupe automatique (distance={cutoff:.3f})",
+            )
+        
         ax.set_xlabel("Échantillons (ou taille du cluster contracté)")
         ax.set_ylabel("Distance de fusion")
-        ax.axhline(
-            y=Z[-(n_clusters - 1), 2],
-            color="red", linestyle="--", linewidth=1.5, alpha=0.8,
-            label=f"Coupe à k={n_clusters}",
-        )
         ax.legend(framealpha=0.1, labelcolor="#e6edf3")
         st.pyplot(fig)
         plt.close()
@@ -750,10 +855,30 @@ def _tab_diana(X: np.ndarray):
 
         st.success(f"✅ DIANA terminé — {n_clusters} clusters")
 
-        # Silhouette
-        if len(set(labels_use)) > 1:
-            sil = silhouette_score(X_use, labels_use)
-            st.metric("Score de Silhouette", f"{sil:.4f}")
+        # ---- Métriques côte à côte ----
+        col_sil, col_inert = st.columns(2)
+        with col_sil:
+            if len(set(labels_use)) > 1:
+                sil = silhouette_score(X_use, labels_use)
+                st.metric("📊 Score de Silhouette", f"{sil:.4f}")
+            else:
+                st.warning("Silhouette non calculable")
+        
+        with col_inert:
+            # DIANA n'a pas d'inertie directe, on calcule une approximation
+            try:
+                from sklearn.metrics import pairwise_distances
+                # Calculer l'inertie intra-cluster approximative
+                inertia_approx = 0
+                for cluster_id in np.unique(labels_use):
+                    cluster_points = X_use[labels_use == cluster_id]
+                    if len(cluster_points) > 1:
+                        # Distance intra-cluster
+                        intra_distances = pairwise_distances(cluster_points)
+                        inertia_approx += np.sum(intra_distances) / 2
+                st.metric("⚡ Inertie (approx.)", f"{inertia_approx:.2f}")
+            except:
+                st.info("Inertie non calculable pour DIANA")
 
         col1, col2 = st.columns(2)
 
@@ -785,7 +910,7 @@ def _tab_diana(X: np.ndarray):
             import pandas as pd
             st.dataframe(
                 pd.DataFrame(split_data),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
 
@@ -849,14 +974,14 @@ def _tab_evaluation(X: np.ndarray):
 
     → **Valeur proche de 1** = bon clustering
     """)
-
     k_max = st.slider("Comparer de k=2 à k=", 3, 15, 8)
 
     algos = st.multiselect(
         "Algorithmes à comparer",
-        ["K-Means", "K-Medoids", "AGNES (ward)", "AGNES (complete)", "DIANA"],
-        default=["K-Means", "AGNES (ward)"],
+        ["K-Means", "K-Medoids", "DIANA"],
+        default=["K-Means"],
         key="eval_algos",
+        help="Seuls les algorithmes nécessitant un K fixe sont comparés ici",
     )
 
     diana_max = st.slider(
@@ -868,6 +993,7 @@ def _tab_evaluation(X: np.ndarray):
     if st.button("📊 Lancer la comparaison"):
         k_range = list(range(2, k_max + 1))
         results = {algo: [] for algo in algos}
+        inertias = {algo: [] for algo in algos if algo in ["K-Means", "K-Medoids"]}
 
         with st.spinner("Comparaison en cours..."):
             for k in k_range:
@@ -875,22 +1001,12 @@ def _tab_evaluation(X: np.ndarray):
                     km = KMeans(n_clusters=k, random_state=42, n_init=10)
                     lkm = km.fit_predict(X)
                     results["K-Means"].append(silhouette_score(X, lkm))
+                    inertias["K-Means"].append(km.inertia_)
 
                 if "K-Medoids" in algos:
-                    lkmed, _, _ = kmedoids(X, k)
+                    lkmed, _, inertia = kmedoids(X, k)
                     results["K-Medoids"].append(silhouette_score(X, lkmed))
-
-                if "AGNES (ward)" in algos:
-                    la = AgglomerativeClustering(n_clusters=k, linkage="ward")
-                    results["AGNES (ward)"].append(
-                        silhouette_score(X, la.fit_predict(X))
-                    )
-
-                if "AGNES (complete)" in algos:
-                    la2 = AgglomerativeClustering(n_clusters=k, linkage="complete")
-                    results["AGNES (complete)"].append(
-                        silhouette_score(X, la2.fit_predict(X))
-                    )
+                    inertias["K-Medoids"].append(inertia)
 
                 if "DIANA" in algos:
                     n = len(X)
@@ -901,34 +1017,51 @@ def _tab_evaluation(X: np.ndarray):
                     ld, _ = diana(X_d, n_clusters=k)
                     results["DIANA"].append(silhouette_score(X_d, ld))
 
-        # ---- Graphique silhouette ----
-        fig, ax = dark_fig(figsize=(11, 5))
-        colors_map = {
-            "K-Means":          "#58a6ff",
-            "K-Medoids":        "#f78166",
-            "AGNES (ward)":     "#7ee787",
-            "AGNES (complete)": "#d29922",
-            "DIANA":            "#bc8cff",
-        }
-        styles = {
-            "K-Means":          ("-",  "o"),
-            "K-Medoids":        ("--", "s"),
-            "AGNES (ward)":     ("-",  "^"),
-            "AGNES (complete)": ("--", "D"),
-            "DIANA":            (":",  "P"),
-        }
-        for algo, scores in results.items():
-            ls, mk = styles[algo]
-            ax.plot(k_range, scores, marker=mk, linestyle=ls,
-                    color=colors_map[algo], linewidth=2, label=algo)
+        # ---- Graphiques côte à côte : Silhouette et Inertie ----
+        col_sil, col_inert = st.columns(2)
+        
+        with col_sil:
+            fig, ax = dark_fig(figsize=(8, 5))
+            colors_map = {
+                "K-Means":          "#58a6ff",
+                "K-Medoids":        "#f78166",
+                "DIANA":            "#bc8cff",
+            }
+            styles = {
+                "K-Means":          ("-",  "o"),
+                "K-Medoids":        ("--", "s"),
+                "DIANA":            (":",  "P"),
+            }
+            for algo, scores in results.items():
+                ls, mk = styles[algo]
+                ax.plot(k_range, scores, marker=mk, linestyle=ls,
+                        color=colors_map[algo], linewidth=2, label=algo)
 
-        ax.set_title("Comparaison des Silhouettes par algorithme", color="#e6edf3")
-        ax.set_xlabel("k (nombre de clusters)")
-        ax.set_ylabel("Score de Silhouette")
-        ax.legend(framealpha=0.1, labelcolor="#e6edf3")
-        ax.grid(alpha=0.1, color="#8b949e")
-        st.pyplot(fig)
-        plt.close()
+            ax.set_title("Comparaison des Silhouettes", color="#e6edf3")
+            ax.set_xlabel("k (nombre de clusters)")
+            ax.set_ylabel("Score de Silhouette")
+            ax.legend(framealpha=0.1, labelcolor="#e6edf3")
+            ax.grid(alpha=0.1, color="#8b949e")
+            st.pyplot(fig)
+            plt.close()
+        
+        with col_inert:
+            if inertias:
+                fig2, ax2 = dark_fig(figsize=(8, 5))
+                for algo, inertia_vals in inertias.items():
+                    ls, mk = styles[algo]
+                    ax2.plot(k_range, inertia_vals, marker=mk, linestyle=ls,
+                             color=colors_map[algo], linewidth=2, label=algo)
+                
+                ax2.set_title("Comparaison des Inerties", color="#e6edf3")
+                ax2.set_xlabel("k (nombre de clusters)")
+                ax2.set_ylabel("Inertie")
+                ax2.legend(framealpha=0.1, labelcolor="#e6edf3")
+                ax2.grid(alpha=0.1, color="#8b949e")
+                st.pyplot(fig2)
+                plt.close()
+            else:
+                st.info(" L'inertie n'est disponible que pour K-Means et K-Medoids")
 
         # ---- Résumé métriques ----
         st.markdown("#### 🏆 Meilleur k par algorithme")

@@ -74,7 +74,7 @@ def _tab_importation():
 
     if st.session_state.df is not None:
         st.markdown("**Aperçu des données :**")
-        st.dataframe(st.session_state.df.head(10), use_container_width=True)
+        st.dataframe(st.session_state.df, width='stretch')
 
 
 # ─────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ def _tab_exploration():
         "Manquants":      df.isnull().sum().values,
         "% Manquants":    (df.isnull().sum().values / len(df) * 100).round(2),
     })
-    st.dataframe(type_df, use_container_width=True)
+    st.dataframe(type_df, width='stretch')
 
     st.markdown("---")
 
@@ -122,7 +122,7 @@ def _tab_exploration():
         ]
         desc = desc[["min", "25%", "50%", "75%", "max", "mean", "mode"]]
         desc.columns = ["Min", "Q1", "Médiane", "Q3", "Max", "Moyenne", "Mode"]
-        st.dataframe(desc.round(4), use_container_width=True)
+        st.dataframe(desc.round(4), width='stretch')
     else:
         st.info("Aucune colonne numérique détectée.")
 
@@ -156,7 +156,7 @@ def _tab_nettoyage():
             "Manquants":    missing.values,
             "Pourcentage":  (missing.values / len(df_work) * 100).round(2),
         })
-        st.dataframe(miss_df, use_container_width=True)
+        st.dataframe(miss_df, width='stretch')
 
     st.markdown("---")
     col_a, col_b = st.columns(2)
@@ -164,43 +164,196 @@ def _tab_nettoyage():
     # ── Imputation
     with col_a:
         st.markdown("**Imputation des valeurs manquantes**")
+        st.markdown("**Stratégies par type de colonne :**")
+        
+        # Colonnes numériques
+        st.markdown("##### 📊 Colonnes Numériques")
         strategy_num = st.selectbox(
-            "Stratégie (colonnes numériques)",
-            ["Moyenne", "Médiane", "Mode", "Valeur constante"],
+            "Stratégie numérique",
+            ["Moyenne", "Médiane", "Mode", "Valeur constante", "Interpolation linéaire"],
+            key="strategy_num"
         )
-        fill_val = 0.0
+        fill_val_num = 0.0
         if strategy_num == "Valeur constante":
-            fill_val = st.number_input("Valeur de remplacement", value=0.0)
+            fill_val_num = st.number_input("Valeur de remplacement numérique", value=0.0, key="fill_num")
+        
+        # Colonnes catégorielles
+        st.markdown("##### 🏷️ Colonnes Catégorielles (object, category)")
+        strategy_cat = st.selectbox(
+            "Stratégie catégorielle",
+            ["Mode (valeur la plus fréquente)", "Valeur constante", "Créer catégorie 'Manquant'"],
+            key="strategy_cat"
+        )
+        fill_val_cat = st.text_input("Valeur de remplacement catégorielle", value="Inconnu", key="fill_cat")
+        
+        # Colonnes temporelles
+        st.markdown("##### 📅 Colonnes Temporelles (datetime)")
+        strategy_date = st.selectbox(
+            "Stratégie temporelle",
+            ["Interpolation forward", "Interpolation backward", "Mode", "Valeur constante"],
+            key="strategy_date"
+        )
+        
+        # Colonnes booléennes
+        st.markdown("##### ✅ Colonnes Booléennes")
+        strategy_bool = st.selectbox(
+            "Stratégie booléenne",
+            ["Mode", "False par défaut", "True par défaut"],
+            key="strategy_bool"
+        )
 
         if st.button("🔧 Appliquer l'imputation"):
             df_c = df_work.copy()
             num_cols = df_c.select_dtypes(include=np.number).columns
-            cat_cols = df_c.select_dtypes(exclude=np.number).columns
+            cat_cols = df_c.select_dtypes(include=['object', 'category']).columns
+            date_cols = df_c.select_dtypes(include=['datetime64']).columns
+            bool_cols = df_c.select_dtypes(include=['bool']).columns
+            
+            imputation_report = []
 
             # Numériques
             for col in num_cols:
                 if df_c[col].isnull().any():
+                    missing_count = df_c[col].isnull().sum()
                     if strategy_num == "Moyenne":
                         df_c[col].fillna(df_c[col].mean(), inplace=True)
                     elif strategy_num == "Médiane":
                         df_c[col].fillna(df_c[col].median(), inplace=True)
                     elif strategy_num == "Mode":
-                        df_c[col].fillna(df_c[col].mode()[0], inplace=True)
-                    else:
-                        df_c[col].fillna(fill_val, inplace=True)
+                        mode_val = df_c[col].mode()[0] if not df_c[col].mode().empty else 0
+                        df_c[col].fillna(mode_val, inplace=True)
+                    elif strategy_num == "Valeur constante":
+                        df_c[col].fillna(fill_val_num, inplace=True)
+                    elif strategy_num == "Interpolation linéaire":
+                        df_c[col] = df_c[col].interpolate(method='linear')
+                    imputation_report.append(f"{col}: {missing_count} → {strategy_num}")
 
-            # Catégorielles → mode
+            # Catégorielles
             for col in cat_cols:
                 if df_c[col].isnull().any():
-                    fill = df_c[col].mode()[0] if not df_c[col].mode().empty else "inconnu"
-                    df_c[col].fillna(fill, inplace=True)
+                    missing_count = df_c[col].isnull().sum()
+                    if strategy_cat == "Mode (valeur la plus fréquente)":
+                        mode_val = df_c[col].mode()[0] if not df_c[col].mode().empty else fill_val_cat
+                        df_c[col].fillna(mode_val, inplace=True)
+                    elif strategy_cat == "Valeur constante":
+                        df_c[col].fillna(fill_val_cat, inplace=True)
+                    elif strategy_cat == "Créer catégorie 'Manquant'":
+                        df_c[col].fillna("Manquant", inplace=True)
+                    imputation_report.append(f"{col}: {missing_count} → {strategy_cat}")
+
+            # Temporelles
+            for col in date_cols:
+                if df_c[col].isnull().any():
+                    missing_count = df_c[col].isnull().sum()
+                    if strategy_date == "Interpolation forward":
+                        df_c[col] = df_c[col].fillna(method='ffill')
+                    elif strategy_date == "Interpolation backward":
+                        df_c[col] = df_c[col].fillna(method='bfill')
+                    elif strategy_date == "Mode":
+                        mode_val = df_c[col].mode()[0] if not df_c[col].mode().empty else pd.Timestamp.now()
+                        df_c[col].fillna(mode_val, inplace=True)
+                    elif strategy_date == "Valeur constante":
+                        df_c[col].fillna(pd.Timestamp.now(), inplace=True)
+                    imputation_report.append(f"{col}: {missing_count} → {strategy_date}")
+
+            # Booléennes
+            for col in bool_cols:
+                if df_c[col].isnull().any():
+                    missing_count = df_c[col].isnull().sum()
+                    if strategy_bool == "Mode":
+                        mode_val = df_c[col].mode()[0] if not df_c[col].mode().empty else False
+                        df_c[col].fillna(mode_val, inplace=True)
+                    elif strategy_bool == "False par défaut":
+                        df_c[col].fillna(False, inplace=True)
+                    elif strategy_bool == "True par défaut":
+                        df_c[col].fillna(True, inplace=True)
+                    imputation_report.append(f"{col}: {missing_count} → {strategy_bool}")
 
             st.session_state.df_cleaned = df_c
             st.session_state.df_normalized = None
-            st.success(
-                f"✅ Imputation appliquée. Valeurs manquantes restantes : "
-                f"{df_c.isnull().sum().sum()}"
-            )
+            
+            # Afficher le rapport
+            st.success(f"✅ Imputation appliquée. Valeurs manquantes restantes : {df_c.isnull().sum().sum()}")
+            
+            if imputation_report:
+                st.markdown("**📋 Rapport d'imputation :**")
+                for item in imputation_report:
+                    st.write(f"• {item}")
+            
+            # Afficher les données après imputation
+            st.markdown("---")
+            st.markdown("**📊 Données après imputation :**")
+            
+            # Affichage du DataFrame complet par défaut
+            st.dataframe(df_c, width='stretch')
+            st.caption(f"📊 Affichage complet : {len(df_c)} lignes × {df_c.shape[1]} colonnes")
+            
+            # Option pour limiter l'affichage si nécessaire
+            with st.expander("⚙️ Options d'affichage avancées"):
+                limit_display = st.checkbox("Limiter le nombre de lignes affichées", value=False)
+                if limit_display:
+                    max_rows = st.number_input("Nombre max de lignes", min_value=5, max_value=100, 
+                                              value=50, step=5)
+                    display_df = df_c.head(max_rows)
+                    st.dataframe(display_df, width='stretch')
+                    st.caption(f"📊 Aperçu limité : {max_rows} premières lignes sur {len(df_c)} au total")
+            
+            # Statistiques après imputation
+            with st.expander("📈 Statistiques après imputation"):
+                col_stats1, col_stats2 = st.columns(2)
+                
+                with col_stats1:
+                    st.metric("Lignes totales", len(df_c))
+                    st.metric("Colonnes", df_c.shape[1])
+                    st.metric("Valeurs manquantes restantes", df_c.isnull().sum().sum())
+                
+                with col_stats2:
+                    # Types de colonnes après imputation
+                    num_cols_after = df_c.select_dtypes(include=np.number).columns.tolist()
+                    cat_cols_after = df_c.select_dtypes(include=['object', 'category']).columns.tolist()
+                    
+                    st.metric("Colonnes numériques", len(num_cols_after))
+                    st.metric("Colonnes catégorielles", len(cat_cols_after))
+                    
+                    # Vérifier s'il y a eu des changements de types
+                    original_types = df_work.dtypes
+                    new_types = df_c.dtypes
+                    type_changes = (original_types != new_types).sum()
+                    if type_changes > 0:
+                        st.warning(f"⚠️ {type_changes} colonne(s) ont changé de type")
+            
+            # Comparaison avant/après pour les colonnes modifiées
+            if imputation_report:
+                st.markdown("**🔍 Détail des colonnes modifiées :**")
+                
+                # Identifier les colonnes qui avaient des valeurs manquantes
+                modified_cols = []
+                for item in imputation_report:
+                    col_name = item.split(":")[0]
+                    modified_cols.append(col_name)
+                
+                if modified_cols:
+                    comparison_data = []
+                    for col in modified_cols[:5]:  # Limiter à 5 colonnes pour l'affichage
+                        if col in df_work.columns and col in df_c.columns:
+                            before_missing = df_work[col].isnull().sum()
+                            after_missing = df_c[col].isnull().sum()
+                            before_unique = df_work[col].nunique()
+                            after_unique = df_c[col].nunique()
+                            
+                            comparison_data.append({
+                                'Colonne': col,
+                                'Manquantes avant': before_missing,
+                                'Manquantes après': after_missing,
+                                'Valeurs uniques avant': before_unique,
+                                'Valeurs uniques après': after_unique,
+                                'Type avant': str(df_work[col].dtype),
+                                'Type après': str(df_c[col].dtype)
+                            })
+                    
+                    if comparison_data:
+                        comparison_df = pd.DataFrame(comparison_data)
+                        st.dataframe(comparison_df, width='stretch', hide_index=True)
 
     # ── Doublons
     with col_b:
@@ -284,8 +437,8 @@ def _tab_normalisation():
     if st.session_state.df_normalized is not None:
         st.markdown("**Aperçu après normalisation :**")
         st.dataframe(
-            st.session_state.df_normalized[num_cols].head(8),
-            use_container_width=True,
+            st.session_state.df_normalized[num_cols],
+            width='stretch',
         )
 
 

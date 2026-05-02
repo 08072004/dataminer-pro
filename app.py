@@ -25,7 +25,7 @@ import streamlit as st
 
 # ── Configuration de la page (doit être le 1er appel Streamlit) ─────────────
 st.set_page_config(
-    page_title="DataMiner Pro",
+    page_title="DataMiner",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",

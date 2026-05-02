@@ -290,3 +290,6 @@ Volet 3 — Classification Supervisée
     Rapport : Accuracy, Precision, Recall, F1-Score
     Comparaison automatique des 4 modèles avec graphique barres
 
+
+
+python -m streamlit run app.py --server.port 8502
